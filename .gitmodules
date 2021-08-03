@@ -1,3 +1,0 @@
-[submodule "libs/aiocoap"]
-	path = libs/aiocoap
-	url = https://github.com/chrysn/aiocoap.git
