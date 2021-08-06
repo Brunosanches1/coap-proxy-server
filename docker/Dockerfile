@@ -1,8 +1,15 @@
-FROM ubuntu:21.04
+# syntax=docker/dockerfile:1
 
-RUN apt-get update && apt-get install python3 
+FROM python:3.8-slim-buster
 
-WORKDIR ../
+WORKDIR app/
+
+COPY app/requirements.txt requirements.txt
+RUN pip3 install -r requirements.txt
+
 COPY . .
+
 EXPOSE 5683
+
+CMD [ "python3", "app/server.py"]
 
