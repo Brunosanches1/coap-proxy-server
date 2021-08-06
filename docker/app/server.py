@@ -73,9 +73,9 @@ def periodic_send_to_cloud():
     while True:
         data_not_sent = DAO.get_data_not_sent()
 
-        req = requests.post('http://0.0.0.0:80/snapshot', json=data_not_sent)
+        req = requests.post('http://localhost:3001/snapshot', json=data_not_sent)
 
-        yield from asyncio.sleep(10)
+        yield from asyncio.sleep(60)
 
 def main():
     root = resource.Site()
