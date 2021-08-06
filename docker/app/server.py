@@ -1,127 +1,89 @@
-#!/usr/bin/env python3
-
-# This file is part of the Python aiocoap library project.
-#
-# Copyright (c) 2012-2014 Maciej Wasilak <http://sixpinetrees.blogspot.com/>,
-#               2013-2014 Christian Amsüss <c.amsuess@energyharvesting.at>
-#
-# aiocoap is free software, this file is published under the MIT license as
-# described in the accompanying LICENSE file.
-
-"""This is a usage example of aiocoap that demonstrates how to implement a
-simple server. See the "Usage Examples" section in the aiocoap documentation
-for some more information."""
-
-import datetime
-import logging
-
 import asyncio
 
 import aiocoap.resource as resource
 import aiocoap
 
+import json
+import sqlite3
+import requests
 
-class BlockResource(resource.Resource):
-    """Example resource which supports the GET and PUT methods. It sends large
-    responses, which trigger blockwise transfer."""
+con = sqlite3.connect("data/garden_data.sqlite")
 
-    def __init__(self):
-        super().__init__()
-        self.set_content(b"This is the resource's default content. It is padded "\
-                b"with numbers to be large enough to trigger blockwise "\
-                b"transfer.\n")
+try:
+        c = con.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS garden_data
+                 (id INTEGER PRIMARY KEY, garden_id INTEGER, dev_id INTEGER, date DATE CURRENT_DATE, temp INTEGER, humidity INTEGER,
+                 light INTEGER, sent BOOLEAN)""")
+        con.close()
+except Exception as e:
+    pass
 
-    def set_content(self, content):
-        self.content = content
-        while len(self.content) <= 1024:
-            self.content = self.content + b"0123456789\n"
+con.close()
 
-    async def render_get(self, request):
-        return aiocoap.Message(payload=self.content)
+class Snapshots(resource.Resource):
+    async def render_post(self, request):
+        data = json.loads(request.payload.decode('utf8'))
 
-    async def render_put(self, request):
-        print('PUT payload: %s' % request.payload)
-        self.set_content(request.payload)
-        return aiocoap.Message(code=aiocoap.CHANGED, payload=self.content)
+        DAO.insert_data(data)
 
+        return aiocoap.Message(content_format=0, payload="Ok".encode('utf8'))
+        
+class DAO():
+    @staticmethod
+    def insert_data(payload):
+        try:
+            con = sqlite3.connect("data/garden_data.sqlite")
 
-class SeparateLargeResource(resource.Resource):
-    """Example resource which supports the GET method. It uses asyncio.sleep to
-    simulate a long-running operation, and thus forces the protocol to send
-    empty ACK first. """
+            cur = con.cursor()
+            query = 'INSERT INTO garden_data (garden_id, dev_id, temp, date, humidity, light, sent) VALUES (2, %d, %d, CURRENT_TIMESTAMP, %d, %d, FALSE)' \
+                        % (payload['id'], payload['temperature'], payload['humidity'], payload['light'])
 
-    def get_link_description(self):
-        # Publish additional data in .well-known/core
-        return dict(**super().get_link_description(), title="A large resource")
+            cur.execute(query)
+            con.commit()
 
-    async def render_get(self, request):
-        await asyncio.sleep(3)
+            con.close()
+        except:
+            pass
 
-        payload = "Three rings for the elven kings under the sky, seven rings "\
-                "for dwarven lords in their halls of stone, nine rings for "\
-                "mortal men doomed to die, one ring for the dark lord on his "\
-                "dark throne.".encode('ascii')
-        return aiocoap.Message(payload=payload)
+    @staticmethod
+    def get_data_not_sent():
+        try:
+            con = sqlite3.connect("data/garden_data.sqlite")
 
-class TimeResource(resource.ObservableResource):
-    """Example resource that can be observed. The `notify` method keeps
-    scheduling itself, and calles `update_state` to trigger sending
-    notifications."""
+            cur = con.cursor()
+            query = 'SELECT garden_id, temp, humidity, light FROM garden_data WHERE sent is FALSE'
 
-    def __init__(self):
-        super().__init__()
+            cur.execute(query)
 
-        self.handle = None
+            r = [dict((cur.description[i][0], value) \
+               for i, value in enumerate(row)) for row in cur.fetchall()]
 
-    def notify(self):
-        self.updated_state()
-        self.reschedule()
+            query = 'UPDATE garden_data SET sent = TRUE WHERE sent=FALSE'
 
-    def reschedule(self):
-        self.handle = asyncio.get_event_loop().call_later(5, self.notify)
+            con.commit()
 
-    def update_observation_count(self, count):
-        if count and self.handle is None:
-            print("Starting the clock")
-            self.reschedule()
-        if count == 0 and self.handle:
-            print("Stopping the clock")
-            self.handle.cancel()
-            self.handle = None
+            con.close()
 
-    async def render_get(self, request):
-        payload = datetime.datetime.now().\
-                strftime("%Y-%m-%d %H:%M").encode('ascii')
-        return aiocoap.Message(payload=payload)
+            return (r[0] if r else None) if None else r
+        except:
+            pass
 
-class WhoAmI(resource.Resource):
-    async def render_get(self, request):
-        text = ["Used protocol: %s." % request.remote.scheme]
+@asyncio.coroutine
+def periodic_send_to_cloud():
+    while True:
+        data_not_sent = DAO.get_data_not_sent()
 
-        text.append("Request came from %s." % request.remote.hostinfo)
-        text.append("The server address used %s." % request.remote.hostinfo_local)
+        req = requests.post('http://0.0.0.0:80/snapshot', json=data_not_sent)
 
-        claims = list(request.remote.authenticated_claims)
-        if claims:
-            text.append("Authenticated claims of the client: %s." % ", ".join(repr(c) for c in claims))
-        else:
-            text.append("No claims authenticated.")
-
-        return aiocoap.Message(content_format=0,
-                payload="\n".join(text).encode('utf8'))
-
-# logging setup
-
-logging.basicConfig(level=logging.INFO)
-logging.getLogger("coap-server").setLevel(logging.DEBUG)
+        yield from asyncio.sleep(10)
 
 def main():
-    # Resource tree creation
     root = resource.Site()
 
-    root.add_resource(['data'], TimeResource())
+    root.add_resource(['data'], Snapshots())
 
     asyncio.Task(aiocoap.Context.create_server_context(root))
+    asyncio.Task(periodic_send_to_cloud())
 
     asyncio.get_event_loop().run_forever()
 
