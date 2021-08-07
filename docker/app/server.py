@@ -51,20 +51,34 @@ class DAO():
             con = sqlite3.connect("data/garden_data.sqlite")
 
             cur = con.cursor()
-            query = 'SELECT garden_id, temp, humidity, light FROM garden_data WHERE sent is FALSE'
+            query = 'SELECT garden_id, dev_id as device,  temp AS temperature, humidity, light AS luminosity FROM garden_data WHERE sent is FALSE'
 
             cur.execute(query)
 
             r = [dict((cur.description[i][0], value) \
                for i, value in enumerate(row)) for row in cur.fetchall()]
 
-            query = 'UPDATE garden_data SET sent = TRUE WHERE sent=FALSE'
+            #query = 'UPDATE garden_data SET sent = TRUE WHERE sent=FALSE'
+
+            r = (r[0] if r else None) if None else r
+
+            garden_ids = set([x['garden_id'] for x in r])
+
+            re_dict = []
+
+            for gid in garden_ids:
+                garden_data = {'garden_id': gid, 'data': []}
+
+                garden_data['data'] = [dict([(key,value) for key, value in ri.items() if key != 'garden_id']) \
+                                            for ri in r if ri['garden_id'] == gid]
+
+                re_dict.append(garden_data)
 
             con.commit()
 
             con.close()
 
-            return (r[0] if r else None) if None else r
+            return re_dict
         except:
             pass
 
@@ -73,7 +87,8 @@ def periodic_send_to_cloud():
     while True:
         data_not_sent = DAO.get_data_not_sent()
 
-        req = requests.post('http://localhost:3001/snapshot', json=data_not_sent)
+        for data in data_not_sent:
+            req = requests.post('http://0.0.0.0:80/api/v1/snapshots/%d' % data['garden_id'], json=data['data'])
 
         yield from asyncio.sleep(60)
 
