@@ -7,6 +7,8 @@ import json
 import sqlite3
 import requests
 
+url = input('Give url of cloud service\n')
+
 con = sqlite3.connect("data/garden_data.sqlite")
 
 try:
@@ -35,7 +37,7 @@ class DAO():
             con = sqlite3.connect("data/garden_data.sqlite")
 
             cur = con.cursor()
-            query = 'INSERT INTO garden_data (garden_id, dev_id, temp, date, humidity, light, sent) VALUES (2, %d, %d, CURRENT_TIMESTAMP, %d, %d, FALSE)' \
+            query = 'INSERT INTO garden_data (garden_id, dev_id, temp, date, humidity, light, sent) VALUES (17, %d, %d, CURRENT_TIMESTAMP, %d, %d, FALSE)' \
                         % (payload['id'], payload['temperature'], payload['humidity'], payload['light'])
 
             cur.execute(query)
@@ -51,34 +53,40 @@ class DAO():
             con = sqlite3.connect("data/garden_data.sqlite")
 
             cur = con.cursor()
-            query = 'SELECT garden_id, dev_id as device,  temp AS temperature, humidity, light AS luminosity FROM garden_data WHERE sent is FALSE'
+            query = 'SELECT garden_id, dev_id as device, temp AS temperature, humidity, light AS luminosity FROM garden_data WHERE sent=FALSE'
 
             cur.execute(query)
 
             r = [dict((cur.description[i][0], value) \
                for i, value in enumerate(row)) for row in cur.fetchall()]
 
-            #query = 'UPDATE garden_data SET sent = TRUE WHERE sent=FALSE'
+            if r is not None:
+                query = 'UPDATE garden_data SET sent=TRUE WHERE sent=FALSE'
 
-            r = (r[0] if r else None) if None else r
+                cur.execute(query)
 
-            garden_ids = set([x['garden_id'] for x in r])
+                r = (r[0] if r else None) if None else r
 
-            re_dict = []
+                garden_ids = set([x['garden_id'] for x in r])
 
-            for gid in garden_ids:
-                garden_data = {'garden_id': gid, 'data': []}
+                re_dict = []
 
-                garden_data['data'] = [dict([(key,value) for key, value in ri.items() if key != 'garden_id']) \
-                                            for ri in r if ri['garden_id'] == gid]
+                for gid in garden_ids:
+                    garden_data = {'garden_id': gid, 'data': []}
 
-                re_dict.append(garden_data)
+                    garden_data['data'] = [dict([(key,value) for key, value in ri.items() if key != 'garden_id']) \
+                                                for ri in r if ri['garden_id'] == gid]
 
-            con.commit()
+                    re_dict.append(garden_data)
 
-            con.close()
+                con.commit()
 
-            return re_dict
+                con.close()
+
+                return re_dict
+            else:
+                con.close()
+                return []
         except:
             pass
 
@@ -88,7 +96,7 @@ def periodic_send_to_cloud():
         data_not_sent = DAO.get_data_not_sent()
 
         for data in data_not_sent:
-            req = requests.post('http://0.0.0.0:80/api/v1/snapshots/%d' % data['garden_id'], json=data['data'])
+            req = requests.post('%s/api/v1/snapshots/%d' % (url, data['garden_id']), json={'snapshot':data['data']})
 
         yield from asyncio.sleep(60)
 
